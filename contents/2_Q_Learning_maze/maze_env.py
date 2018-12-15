@@ -20,7 +20,6 @@ if sys.version_info.major == 2:
 else:
     import tkinter as tk
 
-np.random.seed(1)
 
 UNIT = 40   # pixels
 MAZE_H = 4  # grid height
@@ -46,7 +45,7 @@ class Maze(tk.Tk, object):
             x0, y0, x1, y1 = c, 0, c, MAZE_H * UNIT
             self.canvas.create_line(x0, y0, x1, y1)
         for r in range(0, MAZE_H * UNIT, UNIT):
-            x0, y0, x1, y1 = 0, r, MAZE_H * UNIT, r
+            x0, y0, x1, y1 = 0, r, MAZE_W * UNIT, r
             self.canvas.create_line(x0, y0, x1, y1)
 
         # create origin
@@ -117,9 +116,11 @@ class Maze(tk.Tk, object):
         if s_ == self.canvas.coords(self.oval):
             reward = 1
             done = True
+            s_ = 'terminal'
         elif s_ in [self.canvas.coords(self.hell1), self.canvas.coords(self.hell2)]:
             reward = -1
             done = True
+            s_ = 'terminal'
         else:
             reward = 0
             done = False

@@ -6,8 +6,8 @@ The Cartpole example.
 View more on my tutorial page: https://morvanzhou.github.io/tutorials/
 
 Using:
-tensorflow 1.0
-gym 0.8.0
+tensorflow 1.8.0
+gym 0.10.5
 """
 
 import multiprocessing
@@ -26,7 +26,7 @@ LOG_DIR = './log'
 N_WORKERS = multiprocessing.cpu_count()
 MAX_GLOBAL_EP = 1000
 GLOBAL_NET_SCOPE = 'Global_Net'
-UPDATE_GLOBAL_ITER = 20
+UPDATE_GLOBAL_ITER = 10
 GAMMA = 0.9
 ENTROPY_BETA = 0.001
 LR_A = 0.001    # learning rate for actor
@@ -35,7 +35,6 @@ GLOBAL_RUNNING_R = []
 GLOBAL_EP = 0
 
 env = gym.make(GAME)
-
 N_S = env.observation_space.shape[0]
 N_A = env.action_space.n
 
@@ -46,31 +45,28 @@ class ACNet(object):
         if scope == GLOBAL_NET_SCOPE:   # get global network
             with tf.variable_scope(scope):
                 self.s = tf.placeholder(tf.float32, [None, N_S], 'S')
-                self._build_net()
-                self.a_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
-                self.c_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/critic')
+                self.a_params, self.c_params = self._build_net(scope)[-2:]
         else:   # local net, calculate losses
             with tf.variable_scope(scope):
                 self.s = tf.placeholder(tf.float32, [None, N_S], 'S')
                 self.a_his = tf.placeholder(tf.int32, [None, ], 'A')
                 self.v_target = tf.placeholder(tf.float32, [None, 1], 'Vtarget')
 
-                self.a_prob, self.v = self._build_net()
+                self.a_prob, self.v, self.a_params, self.c_params = self._build_net(scope)
 
                 td = tf.subtract(self.v_target, self.v, name='TD_error')
                 with tf.name_scope('c_loss'):
                     self.c_loss = tf.reduce_mean(tf.square(td))
 
                 with tf.name_scope('a_loss'):
-                    log_prob = tf.reduce_sum(tf.log(self.a_prob) * tf.one_hot(self.a_his, N_A, dtype=tf.float32), axis=1, keep_dims=True)
-                    exp_v = log_prob * td
-                    entropy = -tf.reduce_sum(self.a_prob * tf.log(self.a_prob), axis=1, keep_dims=True)  # encourage exploration
+                    log_prob = tf.reduce_sum(tf.log(self.a_prob + 1e-5) * tf.one_hot(self.a_his, N_A, dtype=tf.float32), axis=1, keep_dims=True)
+                    exp_v = log_prob * tf.stop_gradient(td)
+                    entropy = -tf.reduce_sum(self.a_prob * tf.log(self.a_prob + 1e-5),
+                                             axis=1, keep_dims=True)  # encourage exploration
                     self.exp_v = ENTROPY_BETA * entropy + exp_v
                     self.a_loss = tf.reduce_mean(-self.exp_v)
 
                 with tf.name_scope('local_grad'):
-                    self.a_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
-                    self.c_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/critic')
                     self.a_grads = tf.gradients(self.a_loss, self.a_params)
                     self.c_grads = tf.gradients(self.c_loss, self.c_params)
 
@@ -82,7 +78,7 @@ class ACNet(object):
                     self.update_a_op = OPT_A.apply_gradients(zip(self.a_grads, globalAC.a_params))
                     self.update_c_op = OPT_C.apply_gradients(zip(self.c_grads, globalAC.c_params))
 
-    def _build_net(self):
+    def _build_net(self, scope):
         w_init = tf.random_normal_initializer(0., .1)
         with tf.variable_scope('actor'):
             l_a = tf.layers.dense(self.s, 200, tf.nn.relu6, kernel_initializer=w_init, name='la')
@@ -90,7 +86,9 @@ class ACNet(object):
         with tf.variable_scope('critic'):
             l_c = tf.layers.dense(self.s, 100, tf.nn.relu6, kernel_initializer=w_init, name='lc')
             v = tf.layers.dense(l_c, 1, kernel_initializer=w_init, name='v')  # state value
-        return a_prob, v
+        a_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
+        c_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/critic')
+        return a_prob, v, a_params, c_params
 
     def update_global(self, feed_dict):  # run by a local
         SESS.run([self.update_a_op, self.update_c_op], feed_dict)  # local grads applies to global net
@@ -119,8 +117,8 @@ class Worker(object):
             s = self.env.reset()
             ep_r = 0
             while True:
-                if self.name == 'W_0':
-                    self.env.render()
+                # if self.name == 'W_0':
+                #     self.env.render()
                 a = self.AC.choose_action(s)
                 s_, r, done, info = self.env.step(a)
                 if done: r = -5
